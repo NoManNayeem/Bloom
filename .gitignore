@@ -1,0 +1,101 @@
+# ==============================
+# OS / Editor junk
+# ==============================
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Icon?
+*.swp
+*.swo
+*.orig
+
+# IDEs
+.vscode/
+.idea/
+*.iml
+*.code-workspace
+.qodo/
+
+# ==============================
+# Secrets / Env files
+# (track examples, ignore real envs)
+# ==============================
+.env
+.env.*
+!*.env.example
+!**/*.env.example
+!.env.example
+!.env.lexample
+
+# ==============================
+# Python / Django
+# ==============================
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual envs
+.venv/
+venv/
+.qodo/
+
+# Packaging / builds
+build/
+dist/
+pip-wheel-metadata/
+*.egg-info/
+
+# Django artifacts
+*.sqlite3
+**/db.sqlite3
+**/staticfiles/
+**/media/
+
+# Linters / test / type-check
+.coverage*
+htmlcov/
+.tox/
+.mypy_cache/
+.pytest_cache/
+.pyre/
+.ruff_cache/
+.pytype/
+
+# Logs / PIDs
+*.log
+*.pid
+
+# ==============================
+# Node / Next.js
+# ==============================
+node_modules/
+**/node_modules/
+.npm/
+.pnpm-store/
+.pnpm-debug.log*
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.eslintcache
+.stylelintcache
+
+# Next.js
+.next/
+.next/cache/
+out/
+.vercel/
+.turbo/
+coverage/
+.nyc_output/
+
+# ==============================
+# Jupyter / Notebooks
+# ==============================
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# ==============================
+# Misc caches / temp
+# ==============================
+.cache/
+.tmp/
