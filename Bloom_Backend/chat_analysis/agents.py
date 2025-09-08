@@ -1,6 +1,8 @@
+# agents.py
 import os
-from typing import Dict, Optional, Any
+from typing import Dict, Optional, Any, List
 from pydantic import BaseModel, Field
+from datetime import datetime
 
 # Load environment variables
 try:
@@ -34,20 +36,16 @@ class ValidationResult(BaseModel):
     is_answer_complete: bool = Field(..., description="True if the answer is complete and sufficient for analysis")
     follow_up_question: Optional[str] = Field(None, description="Next question to ask if answer is incomplete")
 
+class ConversationResponse(BaseModel):
+    response: str = Field(..., description="The agent's response to the user")
+    is_question: bool = Field(..., description="Whether the response is a question")
+    current_topic: Optional[str] = Field(None, description="The current topic being discussed")
+
 # Database tool for saving ALL conversations
 @tool
 def save_conversation_tool(user_id: int, user_message: str, agent_message: str, is_complete: bool = False) -> int:
     """
     Save a conversation to the database.
-    
-    Args:
-        user_id: The ID of the user
-        user_message: The message sent by the user
-        agent_message: The message sent by the agent
-        is_complete: Whether this represents a complete answer for analysis
-        
-    Returns:
-        The ID of the saved conversation record
     """
     from .models import ChatConversation
     from django.contrib.auth.models import User
@@ -79,11 +77,21 @@ def save_personality_analysis(user_id: int, question: str, full_answer: str, ana
         quote=analysis_result.quote
     )
 
+# Personality questions to ask
+PERSONALITY_QUESTIONS = [
+    "What are your greatest strengths and how have they helped you in your life?",
+    "Can you describe a challenging situation you faced and how you handled it?",
+    "What are your most important values and how do they guide your decisions?",
+    "How do you typically handle stress or pressure?",
+    "What kind of activities or environments make you feel most energized?",
+]
+
 # Primary Conversation Agent
 conversation_agent = Agent(
     model=OpenAIChat(id="gpt-4o"),
     storage=storage,
     tools=[save_conversation_tool],
+    response_model=ConversationResponse,
     instructions="""
     You are a personality assessment interviewer conducting a continuous conversation.
     
@@ -95,6 +103,7 @@ conversation_agent = Agent(
     5. Maintain natural conversation flow while gathering deep insights
     6. Always ask one question at a time
     7. Be empathetic and encouraging to get detailed responses
+    8. Format your responses in markdown with questions in **bold** and emphasize key parts of responses
     
     CONVERSATION FLOW:
     - Start with an introduction and explain you're conducting a personality assessment
@@ -102,6 +111,11 @@ conversation_agent = Agent(
     - If an answer is too short (< 50 words) or vague, ask follow-up questions
     - Only move to the next main question when the current one is fully answered
     - Use the save_conversation_tool with is_complete=True when an answer is complete
+    
+    STRUCTURED OUTPUT:
+    - response: Your markdown-formatted response
+    - is_question: Whether your response is a question
+    - current_topic: The current topic being discussed
     
     IMPORTANT: You must maintain context of the entire conversation and remember what has been discussed.
     Always use the save_conversation_tool after each exchange to store both your question and the user's response.
@@ -136,12 +150,12 @@ analysis_agent = Agent(
     Analyze complete question-answer pairs to identify personality traits.
     
     RETURN FORMAT:
-    - positive: Dictionary of positive traits with scores (0-100)
-    - negative: Dictionary of negative traits with scores (0-100)
+    - positive: Dictionary of 3-5 positive traits with scores (0-100)
+    - negative: Dictionary of 3-5 negative traits with scores (0-100)
     - quote: A motivational or insightful quote (max 140 characters)
     
     GUIDELINES:
-    - Identify 3-5 key positive and negative traits
+    - Identify key positive and negative traits based on the response
     - Base scores on the depth and consistency of the response
     - Ensure quotes are relevant to the personality insights
     - Be objective and avoid stereotyping

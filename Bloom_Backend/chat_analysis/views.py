@@ -3,12 +3,13 @@ from rest_framework.decorators import api_view, authentication_classes, permissi
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from rest_framework_simplejwt.authentication import JWTAuthentication
-from .agents import conversation_agent, validate_answer, analyze_personality, save_personality_analysis
+from .agents import conversation_agent, validate_answer, analyze_personality, save_personality_analysis, PERSONALITY_QUESTIONS
 from .models import ChatConversation, PersonalityTraits
 import json
+from datetime import datetime
 
-# Store current questions in memory (for demo purposes; consider Redis for production)
-user_current_questions = {}
+# Store conversation state in memory (consider Redis for production)
+user_conversation_state = {}
 
 @api_view(['POST'])
 @authentication_classes([JWTAuthentication])
@@ -19,74 +20,105 @@ def chat_api(request):
     if not user_message:
         return Response({'error': 'Message is required'}, status=status.HTTP_400_BAD_REQUEST)
     
-    # Initialize or retrieve user session
-    session_id = f"user_{request.user.id}"
+    # Initialize or retrieve user session state
+    user_id = request.user.id
+    if user_id not in user_conversation_state:
+        user_conversation_state[user_id] = {
+            'current_question_index': 0,
+            'current_question': None,
+            'waiting_for_complete_answer': False,
+            'conversation_history': []
+        }
     
-    # Get the current question for this user from memory
-    current_question = user_current_questions.get(request.user.id)
+    state = user_conversation_state[user_id]
     
     # Process with conversation agent
     try:
         # Set session state with user info
-        conversation_agent.session_state = {'user_id': request.user.id}
+        conversation_agent.session_state = {'user_id': user_id}
         
         # Prepare the input for the agent
-        agent_input = f"User: {user_message}"
-        if current_question:
-            agent_input = f"Current question: {current_question}\nUser response: {user_message}"
+        context = f"Conversation history: {json.dumps(state['conversation_history'][-5:])}\n" if state['conversation_history'] else ""
+        
+        if state['waiting_for_complete_answer'] and state['current_question']:
+            # We're waiting for a complete answer to the current question
+            context += f"Current question: {state['current_question']}\n"
+        
+        agent_input = f"{context}User: {user_message}"
         
         response = conversation_agent.run(
             input=agent_input,
-            session_id=session_id
+            session_id=f"user_{user_id}"
         )
         
-        # Extract the agent's response
-        agent_response = str(response.content) if response.content else "I'm not sure how to respond to that."
+        # Extract the structured response
+        if hasattr(response, 'content') and response.content and hasattr(response.content, 'response'):
+            agent_response = response.content.response
+            is_question = response.content.is_question
+            current_topic = response.content.current_topic
+        else:
+            agent_response = str(response.content) if response.content else "I'm not sure how to respond to that."
+            is_question = '?' in agent_response
+            current_topic = None
         
         # Store conversation in database
         ChatConversation.objects.create(
             user=request.user,
             user_message=user_message,
             agent_message=agent_response,
-            is_complete_answer=False  # Set appropriately based on your logic
+            is_complete_answer=False
         )
-
-
-        # Check if the agent is asking a new question and store it
-        if (agent_response.endswith('?') or '?' in agent_response) and not current_question:
-            # This is a simple heuristic to detect questions
-            user_current_questions[request.user.id] = agent_response
+        
+        # Update conversation history
+        state['conversation_history'].append({
+            'user': user_message,
+            'agent': agent_response,
+            'timestamp': datetime.now().isoformat()
+        })
         
         # If we have a current question, validate the user's answer
         analysis_triggered = False
-        if current_question:
-            validation = validate_answer(current_question, user_message)
+        if state['waiting_for_complete_answer'] and state['current_question']:
+            validation = validate_answer(state['current_question'], user_message)
             
             if validation.is_answer_complete:
                 # Analyze the complete answer
-                analysis = analyze_personality(current_question, user_message)
+                analysis = analyze_personality(state['current_question'], user_message)
                 
                 # Save personality analysis with question and full answer
                 save_personality_analysis(
-                    user_id=request.user.id,
-                    question=current_question,
+                    user_id=user_id,
+                    question=state['current_question'],
                     full_answer=user_message,
                     analysis_result=analysis
                 )
                 
                 analysis_triggered = True
-                # Clear the current question
-                user_current_questions.pop(request.user.id, None)
+                # Move to next question
+                state['current_question_index'] += 1
+                state['waiting_for_complete_answer'] = False
+                state['current_question'] = None
+                
                 # Update the agent response to indicate completion
-                agent_response = "Thank you for your detailed answer! " + agent_response
+                agent_response = f"Thank you for your detailed answer! {agent_response}"
             else:
                 # Ask follow-up question if validation suggests one
                 if validation.follow_up_question:
-                    agent_response = validation.follow_up_question
+                    agent_response = f"{agent_response}\n\n**Follow-up:** {validation.follow_up_question}"
+        
+        # Check if the agent is asking a new main question
+        if is_question and not state['waiting_for_complete_answer']:
+            if state['current_question_index'] < len(PERSONALITY_QUESTIONS):
+                state['current_question'] = PERSONALITY_QUESTIONS[state['current_question_index']]
+                state['waiting_for_complete_answer'] = True
+            else:
+                # All questions completed
+                agent_response = "Thank you for completing the personality assessment! I have enough information now."
         
         return Response({
             'response': agent_response,
-            'analysis_triggered': analysis_triggered
+            'analysis_triggered': analysis_triggered,
+            'progress': f"{state['current_question_index']}/{len(PERSONALITY_QUESTIONS)}"
         })
         
     except Exception as e:
@@ -121,3 +153,24 @@ def analysis_results(request):
         'analyzed_at': a.analyzed_at
     } for a in analyses]
     return Response(data)
+
+@api_view(['GET'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def conversation_state(request):
+    user_id = request.user.id
+    if user_id in user_conversation_state:
+        state = user_conversation_state[user_id]
+        return Response({
+            'current_question_index': state['current_question_index'],
+            'total_questions': len(PERSONALITY_QUESTIONS),
+            'current_question': state['current_question'],
+            'waiting_for_complete_answer': state['waiting_for_complete_answer']
+        })
+    else:
+        return Response({
+            'current_question_index': 0,
+            'total_questions': len(PERSONALITY_QUESTIONS),
+            'current_question': None,
+            'waiting_for_complete_answer': False
+        })

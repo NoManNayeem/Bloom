@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { motion } from 'framer-motion';
-import { FiSend } from 'react-icons/fi';
+import { FiSend, FiRefreshCw } from 'react-icons/fi';
 import { getCookie } from '@/lib/api';
 
 export default function FreeAnalysisPage() {
@@ -11,17 +11,39 @@ export default function FreeAnalysisPage() {
   const [input, setInput] = useState('');
   const [isTyping, setIsTyping] = useState(false);
   const [analysisResults, setAnalysisResults] = useState([]);
-  const [conversationHistory, setConversationHistory] = useState([]);
+  const [conversationState, setConversationState] = useState(null);
   const [error, setError] = useState(null);
   const messagesEndRef = useRef(null);
   
   const API_URL = process.env.NEXT_PUBLIC_API_URL;
 
-  // Fetch conversation history on component mount
+  // Fetch conversation history and state on component mount
   useEffect(() => {
     fetchConversationHistory();
     fetchAnalysisResults();
+    fetchConversationState();
   }, []);
+
+  const fetchConversationState = async () => {
+    try {
+      const token = getCookie('access_token');
+      if (!token) return;
+      
+      const response = await fetch(`${API_URL}/chat-analysis/state/`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+      });
+      
+      if (response.ok) {
+        const data = await response.json();
+        setConversationState(data);
+      }
+    } catch (error) {
+      console.error('Error fetching conversation state:', error);
+    }
+  };
 
   const fetchConversationHistory = async () => {
     try {
@@ -40,12 +62,11 @@ export default function FreeAnalysisPage() {
       
       if (response.ok) {
         const data = await response.json();
-        setConversationHistory(data);
         
         // Convert history to message format
         const historyMessages = data.flatMap(conv => [
-          { text: conv.agent_message, sender: 'agent' },
-          { text: conv.user_message, sender: 'user' }
+          { text: conv.agent_message, sender: 'agent', timestamp: conv.timestamp },
+          { text: conv.user_message, sender: 'user', timestamp: conv.timestamp }
         ]).filter(msg => msg.text);
         
         setMessages(historyMessages);
@@ -77,13 +98,11 @@ export default function FreeAnalysisPage() {
         const data = await response.json();
         setAnalysisResults(data);
       } else if (response.status === 500) {
-        // Handle database schema issues gracefully
         console.warn('Analysis endpoint returned 500, likely due to database schema changes');
         setAnalysisResults([]);
       }
     } catch (error) {
       console.error('Error fetching analysis results:', error);
-      // Don't set error state for analysis results as they're secondary
     }
   };
 
@@ -94,7 +113,11 @@ export default function FreeAnalysisPage() {
       setIsTyping(true);
       
       // Add user message to UI immediately
-      setMessages(prev => [...prev, { text: userMessage, sender: 'user' }]);
+      setMessages(prev => [...prev, { 
+        text: userMessage, 
+        sender: 'user', 
+        timestamp: new Date().toISOString() 
+      }]);
       
       try {
         const token = getCookie('access_token');
@@ -117,9 +140,14 @@ export default function FreeAnalysisPage() {
           const data = await response.json();
           
           // Add agent response to UI
-          setMessages(prev => [...prev, { text: data.response, sender: 'agent' }]);
+          setMessages(prev => [...prev, { 
+            text: data.response, 
+            sender: 'agent', 
+            timestamp: new Date().toISOString() 
+          }]);
           
-          // If analysis was triggered, refresh analysis results
+          // Refresh conversation state and analysis results
+          fetchConversationState();
           if (data.analysis_triggered) {
             fetchAnalysisResults();
           }
@@ -127,14 +155,16 @@ export default function FreeAnalysisPage() {
           console.error('Failed to send message');
           setMessages(prev => [...prev, { 
             text: 'Sorry, there was an error processing your message.', 
-            sender: 'agent' 
+            sender: 'agent',
+            timestamp: new Date().toISOString()
           }]);
         }
       } catch (error) {
         console.error('Error sending message:', error);
         setMessages(prev => [...prev, { 
           text: 'Sorry, there was an error connecting to the server.', 
-          sender: 'agent' 
+          sender: 'agent',
+          timestamp: new Date().toISOString()
         }]);
       } finally {
         setIsTyping(false);
@@ -150,9 +180,15 @@ export default function FreeAnalysisPage() {
 
   // Handle Enter key press
   const handleKeyPress = (e) => {
-    if (e.key === 'Enter') {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
       handleSend();
     }
+  };
+
+  const formatProgress = () => {
+    if (!conversationState) return '';
+    return `Question ${conversationState.current_question_index + 1} of ${conversationState.total_questions}`;
   };
 
   return (
@@ -164,8 +200,17 @@ export default function FreeAnalysisPage() {
           animate={{ opacity: 1 }}
           transition={{ duration: 0.5 }}
         >
-          <h1 className="text-2xl font-semibold text-gray-900">Free Chat Analysis</h1>
-          <p className="mt-1 text-sm text-gray-600">Talk to our agent to get self-analyzed.</p>
+          <div className="flex justify-between items-center">
+            <div>
+              <h1 className="text-2xl font-semibold text-gray-900">Free Chat Analysis</h1>
+              <p className="mt-1 text-sm text-gray-600">Talk to our agent to get self-analyzed.</p>
+            </div>
+            {conversationState && (
+              <div className="bg-indigo-100 text-indigo-800 px-3 py-1 rounded-full text-sm">
+                {formatProgress()}
+              </div>
+            )}
+          </div>
         </motion.div>
 
         {error && (
@@ -178,29 +223,39 @@ export default function FreeAnalysisPage() {
           {/* Chat Section */}
           <div className="bg-white p-6 rounded-lg shadow-lg h-[500px] flex flex-col lg:col-span-2">
             <div className="flex-grow overflow-y-auto p-4 space-y-4">
-              {messages.map((msg, idx) => (
-                <motion.div
-                  key={idx}
-                  className={`flex ${msg.sender === 'user' ? 'justify-end' : 'justify-start'}`}
-                  initial={{ opacity: 0, y: 10 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ duration: 0.3 }}
-                >
-                  <div
-                    className={`px-4 py-2 rounded-lg max-w-xs ${
-                      msg.sender === 'user'
-                        ? 'bg-indigo-600 text-white shadow-lg'
-                        : 'bg-gray-200 text-gray-900 shadow-sm'
-                    }`}
+              {messages.length === 0 ? (
+                <div className="text-center py-8 text-gray-500">
+                  <p>Start a conversation with the agent to begin your personality analysis.</p>
+                  <p className="mt-2 text-sm">The agent will ask you a series of questions about yourself.</p>
+                </div>
+              ) : (
+                messages.map((msg, idx) => (
+                  <motion.div
+                    key={idx}
+                    className={`flex ${msg.sender === 'user' ? 'justify-end' : 'justify-start'}`}
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ duration: 0.3 }}
                   >
-                    {msg.sender === 'agent' ? (
-                      <ReactMarkdown>{msg.text}</ReactMarkdown>
-                    ) : (
-                      msg.text
-                    )}
-                  </div>
-                </motion.div>
-              ))}
+                    <div
+                      className={`px-4 py-2 rounded-lg max-w-xs ${
+                        msg.sender === 'user'
+                          ? 'bg-indigo-600 text-white shadow-lg'
+                          : 'bg-gray-200 text-gray-900 shadow-sm'
+                      }`}
+                    >
+                      {msg.sender === 'agent' ? (
+                        <ReactMarkdown>{msg.text}</ReactMarkdown>
+                      ) : (
+                        msg.text
+                      )}
+                      <div className={`text-xs mt-1 ${msg.sender === 'user' ? 'text-indigo-200' : 'text-gray-500'}`}>
+                        {new Date(msg.timestamp).toLocaleTimeString()}
+                      </div>
+                    </div>
+                  </motion.div>
+                ))
+              )}
               {isTyping && (
                 <motion.div
                   className="flex justify-start animate-pulse"
@@ -238,7 +293,16 @@ export default function FreeAnalysisPage() {
 
           {/* Analysis Results Section */}
           <div className="bg-white p-6 rounded-lg shadow-lg h-[500px] overflow-y-auto">
-            <h2 className="text-xl font-semibold text-gray-900 mb-4">Analysis Results</h2>
+            <div className="flex justify-between items-center mb-4">
+              <h2 className="text-xl font-semibold text-gray-900">Analysis Results</h2>
+              <button 
+                onClick={fetchAnalysisResults}
+                className="p-2 rounded-full bg-gray-100 hover:bg-gray-200 transition-colors"
+                title="Refresh results"
+              >
+                <FiRefreshCw className="h-4 w-4" />
+              </button>
+            </div>
             
             {analysisResults.length === 0 ? (
               <p className="text-gray-500 text-center py-8">
