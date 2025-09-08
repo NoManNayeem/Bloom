@@ -30,6 +30,10 @@ urlpatterns = [
     path("accounts/", include("accounts.urls")),            # e.g., register/login/me
     path("self-analysis/", include("self_analysis.urls")),
 
+    # Chat analysis API endpoints
+    path('chat-analysis/', include('chat_analysis.urls')),
+
+
     # API Docs
     path("api/docs/", schema_view.with_ui("swagger", cache_timeout=0), name="schema-swagger-ui"),
     path("api/redoc/", schema_view.with_ui("redoc", cache_timeout=0), name="schema-redoc"),

@@ -34,6 +34,7 @@ INSTALLED_APPS = [
     # Local apps
     "accounts",
     "self_analysis",
+    'chat_analysis',
 ]
 
 MIDDLEWARE = [
